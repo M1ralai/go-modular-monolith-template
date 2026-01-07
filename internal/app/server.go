@@ -81,8 +81,11 @@ func NewServer(db *sqlx.DB, zapLogger *logger.ZapLogger) *Server {
 	// Broadcaster for real-time notifications
 	broadcaster := notifService.NewBroadcaster(wsHub, zapLogger)
 
+	// Distributed lock for jobs
+	jobLock := jobs.NewDistributedLock(db)
+
 	// Job Pool for async task processing
-	jobPool := jobs.NewWorkerPool(5, 100, zapLogger, nil)
+	jobPool := jobs.NewWorkerPool(5, 100, zapLogger, nil, jobLock)
 	jobPool.Start()
 
 	// Health module
@@ -99,12 +102,12 @@ func NewServer(db *sqlx.DB, zapLogger *logger.ZapLogger) *Server {
 
 	// LifeArea module
 	lifeareaRepository := lifeareaRepo.NewPostgresRepository(db)
-	lifeareaSvc := lifeareaService.NewLifeAreaService(lifeareaRepository, zapLogger)
+	lifeareaSvc := lifeareaService.NewLifeAreaService(lifeareaRepository, zapLogger, broadcaster)
 	lifeareaHandler := lifeareaHttp.NewHandler(lifeareaSvc)
 
 	// Course module
 	courseRepository := courseRepo.NewPostgresRepository(db)
-	courseSvc := courseService.NewCourseService(courseRepository, zapLogger)
+	courseSvc := courseService.NewCourseService(courseRepository, zapLogger, broadcaster)
 	courseHandler := courseHttp.NewHandler(courseSvc)
 
 	// Task module
@@ -114,17 +117,17 @@ func NewServer(db *sqlx.DB, zapLogger *logger.ZapLogger) *Server {
 
 	// Note module
 	noteRepository := noteRepo.NewPostgresRepository(db)
-	noteSvc := noteService.NewNoteService(noteRepository, zapLogger)
+	noteSvc := noteService.NewNoteService(noteRepository, zapLogger, broadcaster)
 	noteHandler := noteHttp.NewHandler(noteSvc)
 
 	// Habit module
 	habitRepository := habitRepo.NewPostgresRepository(db)
 	habitSvc := habitService.NewHabitService(habitRepository, zapLogger, broadcaster)
-	habitHandler := habitHttp.NewHandler(habitSvc, jobPool, habitRepository, broadcaster, zapLogger)
+	habitHandler := habitHttp.NewHandler(habitSvc, habitRepository, broadcaster, zapLogger)
 
 	// Goal module
 	goalRepository := goalRepo.NewPostgresRepository(db)
-	goalSvc := goalService.NewGoalService(goalRepository, zapLogger)
+	goalSvc := goalService.NewGoalService(goalRepository, zapLogger, broadcaster)
 	goalHandler := goalHttp.NewHandler(goalSvc)
 
 	// Event module
@@ -134,17 +137,17 @@ func NewServer(db *sqlx.DB, zapLogger *logger.ZapLogger) *Server {
 
 	// People module
 	peopleRepository := peopleRepo.NewPostgresRepository(db)
-	peopleSvc := peopleService.NewPersonService(peopleRepository, zapLogger)
+	peopleSvc := peopleService.NewPersonService(peopleRepository, zapLogger, broadcaster)
 	peopleHandler := peopleHttp.NewHandler(peopleSvc)
 
 	// Journal module
 	journalRepository := journalRepo.NewPostgresRepository(db)
-	journalSvc := journalService.NewJournalService(journalRepository, zapLogger)
+	journalSvc := journalService.NewJournalService(journalRepository, zapLogger, broadcaster)
 	journalHandler := journalHttp.NewHandler(journalSvc)
 
 	// Finance module
 	financeRepository := financeRepo.NewPostgresRepository(db)
-	financeSvc := financeService.NewFinanceService(financeRepository, zapLogger)
+	financeSvc := financeService.NewFinanceService(financeRepository, zapLogger, broadcaster)
 	financeHandler := financeHttp.NewHandler(financeSvc)
 
 	// Calendar module
@@ -160,20 +163,27 @@ func NewServer(db *sqlx.DB, zapLogger *logger.ZapLogger) *Server {
 
 	router := mux.NewRouter()
 
+	// WebSocket route - MUST be registered BEFORE middleware to avoid ResponseWriter wrapping
+	// WebSocket requires the original http.ResponseWriter to hijack the connection
+	router.HandleFunc("/ws", wsHandler.HandleConnection).Methods("GET")
+
+	// Apply middleware to all routes EXCEPT WebSocket
 	router.Use(middleware.RecoveryMiddleware)
 	router.Use(zapLogger.Middleware)
 	router.Use(middleware.MetricsMiddleware)
 	router.Use(middleware.TimeoutMiddleware)
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
+			// Skip Content-Type header for WebSocket upgrade
+			if r.URL.Path != "/ws" {
+				w.Header().Set("Content-Type", "application/json")
+			}
 			next.ServeHTTP(w, r)
 		})
 	})
 
 	router.Handle("/metrics", promhttp.Handler()).Methods("GET")
 	router.HandleFunc("/health", healthHandler.HealthCheck).Methods("GET")
-	router.HandleFunc("/ws", wsHandler.HandleConnection).Methods("GET")
 
 	// Public routes (no auth required)
 	authHandler.RegisterRoutes(router)

@@ -9,15 +9,18 @@ import (
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/people/domain"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/people/dto"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/people/repository"
+	"github.com/M1ralai/go-modular-monolith-template/internal/modules/notification"
+	notifService "github.com/M1ralai/go-modular-monolith-template/internal/modules/notification/service"
 )
 
 type personService struct {
-	repo   repository.PersonRepository
-	logger *logger.ZapLogger
+	repo        repository.PersonRepository
+	logger      *logger.ZapLogger
+	broadcaster *notifService.Broadcaster
 }
 
-func NewPersonService(repo repository.PersonRepository, logger *logger.ZapLogger) PersonService {
-	return &personService{repo: repo, logger: logger}
+func NewPersonService(repo repository.PersonRepository, logger *logger.ZapLogger, broadcaster *notifService.Broadcaster) PersonService {
+	return &personService{repo: repo, logger: logger, broadcaster: broadcaster}
 }
 
 func (s *personService) Create(ctx context.Context, req *dto.CreatePersonRequest, userID int) (*dto.PersonResponse, error) {
@@ -30,7 +33,20 @@ func (s *personService) Create(ctx context.Context, req *dto.CreatePersonRequest
 		return nil, err
 	}
 	s.logger.Info("Person created", map[string]interface{}{"user_id": userID, "person_id": created.ID, "action": "CREATE_PERSON_SUCCESS"})
-	return dto.ToPersonResponse(created), nil
+	response := dto.ToPersonResponse(created)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventPersonCreated, map[string]interface{}{
+			"person_id": created.ID,
+			"person":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventPersonCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+	return response, nil
 }
 
 func (s *personService) GetByID(ctx context.Context, id, userID int) (*dto.PersonResponse, error) {
@@ -110,7 +126,20 @@ func (s *personService) Update(ctx context.Context, id int, req *dto.UpdatePerso
 		return nil, err
 	}
 	s.logger.Info("Person updated", map[string]interface{}{"user_id": userID, "person_id": id, "action": "UPDATE_PERSON_SUCCESS"})
-	return dto.ToPersonResponse(person), nil
+	response := dto.ToPersonResponse(person)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventPersonUpdated, map[string]interface{}{
+			"person_id": id,
+			"person":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventPersonUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+	return response, nil
 }
 
 func (s *personService) Delete(ctx context.Context, id, userID int) error {
@@ -130,5 +159,17 @@ func (s *personService) Delete(ctx context.Context, id, userID int) error {
 		return err
 	}
 	s.logger.Info("Person deleted", map[string]interface{}{"user_id": userID, "person_id": id, "action": "DELETE_PERSON_SUCCESS"})
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventPersonDeleted, map[string]interface{}{
+			"person_id": id,
+			"name":      person.Name,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventPersonDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
 	return nil
 }

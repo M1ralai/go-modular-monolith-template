@@ -33,14 +33,20 @@ func (s *eventService) Create(ctx context.Context, req *dto.CreateEventRequest, 
 		return nil, err
 	}
 	s.logger.Info("Event created", map[string]interface{}{"user_id": userID, "event_id": created.ID, "action": "CREATE_EVENT_SUCCESS"})
+	response := dto.ToEventResponse(created)
 	if s.broadcaster != nil {
 		s.broadcaster.Publish(userID, notification.EventEventCreated, map[string]interface{}{
-			"event_id":   created.ID,
-			"title":      created.Title,
-			"start_time": created.StartTime,
+			"event_id": created.ID,
+			"event":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventEventCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
 		})
 	}
-	return dto.ToEventResponse(created), nil
+	return response, nil
 }
 
 func (s *eventService) GetByID(ctx context.Context, id, userID int) (*dto.EventResponse, error) {
@@ -112,13 +118,20 @@ func (s *eventService) Update(ctx context.Context, id int, req *dto.UpdateEventR
 		return nil, err
 	}
 	s.logger.Info("Event updated", map[string]interface{}{"user_id": userID, "event_id": id, "action": "UPDATE_EVENT_SUCCESS"})
+	response := dto.ToEventResponse(event)
 	if s.broadcaster != nil {
 		s.broadcaster.Publish(userID, notification.EventEventUpdated, map[string]interface{}{
 			"event_id": id,
-			"title":    event.Title,
+			"event":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventEventUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
 		})
 	}
-	return dto.ToEventResponse(event), nil
+	return response, nil
 }
 
 func (s *eventService) Delete(ctx context.Context, id, userID int) error {
@@ -142,6 +155,12 @@ func (s *eventService) Delete(ctx context.Context, id, userID int) error {
 		s.broadcaster.Publish(userID, notification.EventEventDeleted, map[string]interface{}{
 			"event_id": id,
 			"title":    event.Title,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventEventDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
 		})
 	}
 	return nil

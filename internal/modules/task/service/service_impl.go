@@ -71,15 +71,22 @@ func (s *taskService) Create(ctx context.Context, req *dto.CreateTaskRequest, us
 		"action":  "CREATE_TASK_SUCCESS",
 	})
 
+	response := dto.ToTaskResponse(created, 0, 0)
+	
 	if s.broadcaster != nil {
 		s.broadcaster.Publish(userID, notification.EventTaskCreated, map[string]interface{}{
-			"task_id":  created.ID,
-			"title":    created.Title,
-			"priority": created.Priority,
+			"task_id": created.ID,
+			"task":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventTaskCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
 		})
 	}
 
-	return dto.ToTaskResponse(created, 0, 0), nil
+	return response, nil
 }
 
 func (s *taskService) GetByID(ctx context.Context, id, userID int) (*dto.TaskResponse, error) {
@@ -190,8 +197,16 @@ func (s *taskService) Update(ctx context.Context, id int, req *dto.UpdateTaskReq
 	if req.Priority != nil {
 		task.Priority = *req.Priority
 	}
+	wasCompleted := task.IsCompleted
 	if req.IsCompleted != nil {
 		task.IsCompleted = *req.IsCompleted
+		if *req.IsCompleted && !wasCompleted {
+			// Mark as completed if transitioning from incomplete to complete
+			task.MarkCompleted()
+		} else if !*req.IsCompleted && wasCompleted {
+			// Unmark completion
+			task.CompletedAt = nil
+		}
 	}
 	if req.CompletedAt != nil {
 		task.CompletedAt = req.CompletedAt
@@ -214,15 +229,38 @@ func (s *taskService) Update(ctx context.Context, id int, req *dto.UpdateTaskReq
 		"action":  "UPDATE_TASK_SUCCESS",
 	})
 
+	total, completed, _ := s.repo.CountSubtasks(ctx, id)
+	response := dto.ToTaskResponse(task, total, completed)
+	
 	if s.broadcaster != nil {
+		// If task was just completed, send completion event
+		if req.IsCompleted != nil && *req.IsCompleted && !wasCompleted {
+			s.broadcaster.Publish(userID, notification.EventTaskCompleted, map[string]interface{}{
+				"task_id": id,
+				"task":    response,
+			})
+			s.logger.Info("WebSocket event published", map[string]interface{}{
+				"event_type": notification.EventTaskCompleted,
+				"user_id":    userID,
+				"entity_id":  id,
+				"action":     "WS_EVENT_PUBLISHED",
+			})
+		}
+		
+		// Always send update event
 		s.broadcaster.Publish(userID, notification.EventTaskUpdated, map[string]interface{}{
 			"task_id": id,
-			"title":   task.Title,
+			"task":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventTaskUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
 		})
 	}
 
-	total, completed, _ := s.repo.CountSubtasks(ctx, id)
-	return dto.ToTaskResponse(task, total, completed), nil
+	return response, nil
 }
 
 func (s *taskService) Delete(ctx context.Context, id, userID int) error {
@@ -262,6 +300,12 @@ func (s *taskService) Delete(ctx context.Context, id, userID int) error {
 		s.broadcaster.Publish(userID, notification.EventTaskDeleted, map[string]interface{}{
 			"task_id": id,
 			"title":   task.Title,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventTaskDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
 		})
 	}
 
@@ -307,10 +351,19 @@ func (s *taskService) CompleteSubtask(ctx context.Context, subtaskID, userID int
 		"action":     "COMPLETE_SUBTASK_SUCCESS",
 	})
 
+	total, completed, _ := s.repo.CountSubtasks(ctx, subtaskID)
+	response := dto.ToTaskResponse(subtask, total, completed)
+	
 	if s.broadcaster != nil {
 		s.broadcaster.Publish(userID, notification.EventTaskCompleted, map[string]interface{}{
 			"task_id": subtaskID,
-			"title":   subtask.Title,
+			"task":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventTaskCompleted,
+			"user_id":    userID,
+			"entity_id":  subtaskID,
+			"action":     "WS_EVENT_PUBLISHED",
 		})
 	}
 
@@ -349,10 +402,19 @@ func (s *taskService) checkAndCompleteParent(ctx context.Context, parentID, user
 		})
 
 		if s.broadcaster != nil {
+			parentTotal, parentCompleted, _ := s.repo.CountSubtasks(ctx, parentID)
+			parentResponse := dto.ToTaskResponse(parent, parentTotal, parentCompleted)
+			
 			s.broadcaster.Publish(userID, notification.EventTaskCompleted, map[string]interface{}{
 				"task_id":        parentID,
-				"title":          parent.Title,
+				"task":           parentResponse,
 				"auto_completed": true,
+			})
+			s.logger.Info("WebSocket event published", map[string]interface{}{
+				"event_type": notification.EventTaskCompleted,
+				"user_id":    userID,
+				"entity_id":  parentID,
+				"action":     "WS_EVENT_PUBLISHED",
 			})
 		}
 	}

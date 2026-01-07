@@ -9,17 +9,21 @@ import (
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/note/domain"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/note/dto"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/note/repository"
+	"github.com/M1ralai/go-modular-monolith-template/internal/modules/notification"
+	notifService "github.com/M1ralai/go-modular-monolith-template/internal/modules/notification/service"
 )
 
 type noteService struct {
-	repo   repository.NoteRepository
-	logger *logger.ZapLogger
+	repo        repository.NoteRepository
+	logger      *logger.ZapLogger
+	broadcaster *notifService.Broadcaster
 }
 
-func NewNoteService(repo repository.NoteRepository, logger *logger.ZapLogger) NoteService {
+func NewNoteService(repo repository.NoteRepository, logger *logger.ZapLogger, broadcaster *notifService.Broadcaster) NoteService {
 	return &noteService{
-		repo:   repo,
-		logger: logger,
+		repo:        repo,
+		logger:      logger,
+		broadcaster: broadcaster,
 	}
 }
 
@@ -59,7 +63,21 @@ func (s *noteService) Create(ctx context.Context, req *dto.CreateNoteRequest, us
 		"action":  "CREATE_NOTE_SUCCESS",
 	})
 
-	return dto.ToNoteResponse(created), nil
+	response := dto.ToNoteResponse(created)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventNoteCreated, map[string]interface{}{
+			"note_id": created.ID,
+			"note":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventNoteCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *noteService) GetByID(ctx context.Context, id, userID int) (*dto.NoteResponse, error) {
@@ -224,7 +242,21 @@ func (s *noteService) Update(ctx context.Context, id int, req *dto.UpdateNoteReq
 		"action":  "UPDATE_NOTE_SUCCESS",
 	})
 
-	return dto.ToNoteResponse(note), nil
+	response := dto.ToNoteResponse(note)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventNoteUpdated, map[string]interface{}{
+			"note_id": id,
+			"note":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventNoteUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *noteService) Delete(ctx context.Context, id, userID int) error {
@@ -265,6 +297,19 @@ func (s *noteService) Delete(ctx context.Context, id, userID int) error {
 		"note_id": id,
 		"action":  "DELETE_NOTE_SUCCESS",
 	})
+
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventNoteDeleted, map[string]interface{}{
+			"note_id": id,
+			"title":   note.Title,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventNoteDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
 
 	return nil
 }

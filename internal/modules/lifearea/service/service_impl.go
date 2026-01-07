@@ -9,17 +9,21 @@ import (
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/lifearea/domain"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/lifearea/dto"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/lifearea/repository"
+	"github.com/M1ralai/go-modular-monolith-template/internal/modules/notification"
+	notifService "github.com/M1ralai/go-modular-monolith-template/internal/modules/notification/service"
 )
 
 type lifeAreaService struct {
-	repo   repository.LifeAreaRepository
-	logger *logger.ZapLogger
+	repo        repository.LifeAreaRepository
+	logger      *logger.ZapLogger
+	broadcaster *notifService.Broadcaster
 }
 
-func NewLifeAreaService(repo repository.LifeAreaRepository, logger *logger.ZapLogger) LifeAreaService {
+func NewLifeAreaService(repo repository.LifeAreaRepository, logger *logger.ZapLogger, broadcaster *notifService.Broadcaster) LifeAreaService {
 	return &lifeAreaService{
-		repo:   repo,
-		logger: logger,
+		repo:        repo,
+		logger:      logger,
+		broadcaster: broadcaster,
 	}
 }
 
@@ -55,7 +59,21 @@ func (s *lifeAreaService) Create(ctx context.Context, req *dto.CreateLifeAreaReq
 		"action":       "CREATE_LIFE_AREA",
 	})
 
-	return dto.ToLifeAreaResponse(created), nil
+	response := dto.ToLifeAreaResponse(created)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventLifeAreaCreated, map[string]interface{}{
+			"lifearea_id": created.ID,
+			"lifearea":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventLifeAreaCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *lifeAreaService) GetByID(ctx context.Context, id, userID int) (*dto.LifeAreaResponse, error) {
@@ -128,7 +146,21 @@ func (s *lifeAreaService) Update(ctx context.Context, id int, req *dto.UpdateLif
 		"action":       "UPDATE_LIFE_AREA",
 	})
 
-	return dto.ToLifeAreaResponse(lifeArea), nil
+	response := dto.ToLifeAreaResponse(lifeArea)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventLifeAreaUpdated, map[string]interface{}{
+			"lifearea_id": id,
+			"lifearea":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventLifeAreaUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *lifeAreaService) Delete(ctx context.Context, id, userID int) error {
@@ -163,6 +195,19 @@ func (s *lifeAreaService) Delete(ctx context.Context, id, userID int) error {
 		"user_id":      userID,
 		"action":       "DELETE_LIFE_AREA",
 	})
+
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventLifeAreaDeleted, map[string]interface{}{
+			"lifearea_id": id,
+			"name":        lifeArea.Name,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventLifeAreaDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
 
 	return nil
 }

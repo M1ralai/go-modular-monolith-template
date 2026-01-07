@@ -3,23 +3,62 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/M1ralai/go-modular-monolith-template/internal/infrastructure/logger"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/course/domain"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/course/dto"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/course/repository"
+	"github.com/M1ralai/go-modular-monolith-template/internal/modules/notification"
+	notifService "github.com/M1ralai/go-modular-monolith-template/internal/modules/notification/service"
 )
 
-type courseService struct {
-	repo   repository.CourseRepository
-	logger *logger.ZapLogger
+// normalizeTime ensures time string is in HH:MM format
+// Handles various input formats and converts to PostgreSQL TIME format
+func normalizeTime(timeStr string) string {
+	if timeStr == "" {
+		return "00:00"
+	}
+
+	// Remove whitespace
+	timeStr = strings.TrimSpace(timeStr)
+
+	// Split by colon
+	parts := strings.Split(timeStr, ":")
+	if len(parts) < 2 {
+		return "00:00"
+	}
+
+	// Parse hour and minute
+	var hour, minute int
+	fmt.Sscanf(parts[0], "%d", &hour)
+	fmt.Sscanf(parts[1], "%d", &minute)
+
+	// Validate ranges
+	if hour < 0 || hour > 23 {
+		hour = 0
+	}
+	if minute < 0 || minute > 59 {
+		minute = 0
+	}
+
+	// Format as HH:MM
+	return fmt.Sprintf("%02d:%02d", hour, minute)
 }
 
-func NewCourseService(repo repository.CourseRepository, logger *logger.ZapLogger) CourseService {
+type courseService struct {
+	repo        repository.CourseRepository
+	logger      *logger.ZapLogger
+	broadcaster *notifService.Broadcaster
+}
+
+func NewCourseService(repo repository.CourseRepository, logger *logger.ZapLogger, broadcaster *notifService.Broadcaster) CourseService {
 	return &courseService{
-		repo:   repo,
-		logger: logger,
+		repo:        repo,
+		logger:      logger,
+		broadcaster: broadcaster,
 	}
 }
 
@@ -63,7 +102,21 @@ func (s *courseService) Create(ctx context.Context, req *dto.CreateCourseRequest
 		"action":    "CREATE_COURSE",
 	})
 
-	return dto.ToCourseResponse(created), nil
+	response := dto.ToCourseResponse(created)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventCourseCreated, map[string]interface{}{
+			"course_id": created.ID,
+			"course":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventCourseCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *courseService) GetByID(ctx context.Context, id, userID int) (*dto.CourseResponse, error) {
@@ -226,7 +279,21 @@ func (s *courseService) Update(ctx context.Context, id int, req *dto.UpdateCours
 		"action":    "UPDATE_COURSE",
 	})
 
-	return dto.ToCourseResponse(course), nil
+	response := dto.ToCourseResponse(course)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventCourseUpdated, map[string]interface{}{
+			"course_id": id,
+			"course":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventCourseUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *courseService) Delete(ctx context.Context, id, userID int) error {
@@ -261,6 +328,19 @@ func (s *courseService) Delete(ctx context.Context, id, userID int) error {
 		"user_id":   userID,
 		"action":    "DELETE_COURSE",
 	})
+
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventCourseDeleted, map[string]interface{}{
+			"course_id": id,
+			"name":      course.Name,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventCourseDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
 
 	return nil
 }
@@ -338,7 +418,22 @@ func (s *courseService) CreateComponent(ctx context.Context, req *dto.CreateComp
 		"action":       "CREATE_COMPONENT",
 	})
 
-	return dto.ToComponentResponse(created), nil
+	response := dto.ToComponentResponse(created)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventComponentCreated, map[string]interface{}{
+			"component_id": created.ID,
+			"course_id":    req.CourseID,
+			"component":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventComponentCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *courseService) GetComponents(ctx context.Context, courseID, userID int) ([]*dto.ComponentResponse, error) {
@@ -454,7 +549,56 @@ func (s *courseService) UpdateComponent(ctx context.Context, id int, req *dto.Up
 		"action":       "UPDATE_COMPONENT",
 	})
 
-	return dto.ToComponentResponse(component), nil
+	response := dto.ToComponentResponse(component)
+	
+	// Check if grade was updated - broadcast grade change
+	if req.AchievedScore != nil && s.broadcaster != nil {
+		// Recalculate course grade
+		course, _ := s.repo.GetByID(ctx, component.CourseID)
+		if course != nil {
+			components, _ := s.repo.GetComponents(ctx, component.CourseID)
+			var totalWeight, weightedScore float64
+			for _, comp := range components {
+				if comp.AchievedScore != nil && comp.IsCompleted {
+					totalWeight += comp.Weight
+					weightedScore += (*comp.AchievedScore / comp.MaxScore) * comp.Weight
+				}
+			}
+			var newGrade float64
+			if totalWeight > 0 {
+				newGrade = (weightedScore / totalWeight) * 100
+			}
+			
+			s.broadcaster.Publish(userID, notification.EventComponentGraded, map[string]interface{}{
+				"component_id": id,
+				"course_id":    component.CourseID,
+				"component":     response,
+				"new_grade":    newGrade,
+			})
+			s.logger.Info("WebSocket event published", map[string]interface{}{
+				"event_type": notification.EventComponentGraded,
+				"user_id":    userID,
+				"entity_id":  id,
+				"action":     "WS_EVENT_PUBLISHED",
+			})
+		}
+	}
+	
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventComponentUpdated, map[string]interface{}{
+			"component_id": id,
+			"course_id":   component.CourseID,
+			"component":   response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventComponentUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *courseService) DeleteComponent(ctx context.Context, id, userID int) error {
@@ -522,11 +666,15 @@ func (s *courseService) CreateSchedule(ctx context.Context, req *dto.CreateSched
 		return nil, errors.New("unauthorized")
 	}
 
+	// Validate and normalize time format (HH:MM)
+	startTime := normalizeTime(req.StartTime)
+	endTime := normalizeTime(req.EndTime)
+
 	schedule := &domain.Schedule{
 		CourseID:  req.CourseID,
 		DayOfWeek: req.DayOfWeek,
-		StartTime: req.StartTime,
-		EndTime:   req.EndTime,
+		StartTime: startTime,
+		EndTime:   endTime,
 		Location:  req.Location,
 		CreatedAt: time.Now(),
 	}
@@ -548,7 +696,22 @@ func (s *courseService) CreateSchedule(ctx context.Context, req *dto.CreateSched
 		"action":      "CREATE_SCHEDULE",
 	})
 
-	return dto.ToScheduleResponse(created), nil
+	response := dto.ToScheduleResponse(created)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventScheduleCreated, map[string]interface{}{
+			"schedule_id": created.ID,
+			"course_id":   req.CourseID,
+			"schedule":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventScheduleCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *courseService) GetSchedules(ctx context.Context, courseID, userID int) ([]*dto.ScheduleResponse, error) {
@@ -604,10 +767,20 @@ func (s *courseService) UpdateSchedule(ctx context.Context, id int, req *dto.Upd
 		schedule.DayOfWeek = *req.DayOfWeek
 	}
 	if req.StartTime != nil {
-		schedule.StartTime = *req.StartTime
+		normalizedStart := normalizeTime(*req.StartTime)
+		s.logger.Info("Normalizing start time", map[string]interface{}{
+			"original":  *req.StartTime,
+			"normalized": normalizedStart,
+		})
+		schedule.StartTime = normalizedStart
 	}
 	if req.EndTime != nil {
-		schedule.EndTime = *req.EndTime
+		normalizedEnd := normalizeTime(*req.EndTime)
+		s.logger.Info("Normalizing end time", map[string]interface{}{
+			"original":  *req.EndTime,
+			"normalized": normalizedEnd,
+		})
+		schedule.EndTime = normalizedEnd
 	}
 	if req.Location != nil {
 		schedule.Location = *req.Location
@@ -628,7 +801,22 @@ func (s *courseService) UpdateSchedule(ctx context.Context, id int, req *dto.Upd
 		"action":      "UPDATE_SCHEDULE",
 	})
 
-	return dto.ToScheduleResponse(schedule), nil
+	response := dto.ToScheduleResponse(schedule)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventScheduleUpdated, map[string]interface{}{
+			"schedule_id": id,
+			"course_id":   schedule.CourseID,
+			"schedule":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventScheduleUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+
+	return response, nil
 }
 
 func (s *courseService) DeleteSchedule(ctx context.Context, id, userID int) error {
@@ -672,6 +860,20 @@ func (s *courseService) DeleteSchedule(ctx context.Context, id, userID int) erro
 		"user_id":     userID,
 		"action":      "DELETE_SCHEDULE",
 	})
+
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventScheduleDeleted, map[string]interface{}{
+			"schedule_id": id,
+			"course_id":   schedule.CourseID,
+			"day_of_week": schedule.DayOfWeek,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventScheduleDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
 
 	return nil
 }

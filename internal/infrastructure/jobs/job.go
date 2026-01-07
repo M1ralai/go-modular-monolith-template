@@ -85,6 +85,14 @@ type JobEventEmitter interface {
 	EmitJobFailed(ctx context.Context, jobName string, err error)
 }
 
+// LockableJob interface for jobs that support distributed locking
+type LockableJob interface {
+	Job
+	// LockKey returns a unique lock key for this job instance
+	// Should include job name and entity ID to prevent duplicate execution
+	LockKey() int64
+}
+
 // BaseJob provides common functionality for all jobs
 type BaseJob struct {
 	name     string

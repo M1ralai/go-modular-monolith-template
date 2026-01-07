@@ -95,6 +95,12 @@ func (rw *responseWriter) WriteHeader(code int) {
 // Middleware logs all HTTP requests
 func (l *ZapLogger) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip logging middleware for WebSocket to avoid ResponseWriter wrapping
+		if r.URL.Path == "/ws" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		start := time.Now()
 
 		rw := &responseWriter{

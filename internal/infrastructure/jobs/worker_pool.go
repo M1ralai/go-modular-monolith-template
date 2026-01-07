@@ -19,6 +19,7 @@ type WorkerPool struct {
 	eventEmitter JobEventEmitter
 	mu           sync.RWMutex
 	running      bool
+	lock         *DistributedLock
 }
 
 type jobExecution struct {
@@ -28,13 +29,14 @@ type jobExecution struct {
 }
 
 // NewWorkerPool creates a new worker pool with the specified number of workers
-func NewWorkerPool(workers, queueSize int, logger *logger.ZapLogger, emitter JobEventEmitter) *WorkerPool {
+func NewWorkerPool(workers, queueSize int, logger *logger.ZapLogger, emitter JobEventEmitter, lock *DistributedLock) *WorkerPool {
 	return &WorkerPool{
 		workers:      workers,
 		jobQueue:     make(chan jobExecution, queueSize),
 		quit:         make(chan bool),
 		logger:       logger,
 		eventEmitter: emitter,
+		lock:         lock,
 	}
 }
 
@@ -193,13 +195,51 @@ func (p *WorkerPool) executeJob(workerID int, job Job, ctx context.Context) *Job
 		StartedAt: time.Now(),
 	}
 
-	// Create timeout context
+	// Create timeout context - increase to 30 seconds minimum for database operations
 	timeout := job.Timeout()
-	if timeout <= 0 {
-		timeout = 5 * time.Minute // Default timeout
+	if timeout <= 0 || timeout < 30*time.Second {
+		timeout = 30 * time.Second // Minimum 30 seconds for database operations
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	// Try to acquire distributed lock if job supports it
+	var lockKey int64
+	if lockableJob, ok := job.(LockableJob); ok && p.lock != nil {
+		lockKey = lockableJob.LockKey()
+		acquired, err := p.lock.TryLock(ctx, lockKey)
+		if err != nil {
+			p.logger.Error("Failed to acquire lock", err, map[string]interface{}{
+				"job":     job.Name(),
+				"lock_key": lockKey,
+				"action":  "LOCK_ACQUIRE_FAILED",
+			})
+			result.Status = JobStatusFailed
+			result.Error = fmt.Errorf("failed to acquire lock: %w", err)
+			result.CompletedAt = time.Now()
+			return result
+		}
+		if !acquired {
+			p.logger.Info("Job already running, skipping", map[string]interface{}{
+				"job":      job.Name(),
+				"lock_key": lockKey,
+				"action":   "JOB_SKIPPED_LOCK_HELD",
+			})
+			result.Status = JobStatusFailed
+			result.Error = fmt.Errorf("job already running (lock held)")
+			result.CompletedAt = time.Now()
+			return result
+		}
+		defer func() {
+			if unlockErr := p.lock.Unlock(context.Background(), lockKey); unlockErr != nil {
+				p.logger.Error("Failed to release lock", unlockErr, map[string]interface{}{
+					"job":      job.Name(),
+					"lock_key": lockKey,
+					"action":   "LOCK_RELEASE_FAILED",
+				})
+			}
+		}()
+	}
 
 	// Emit started event
 	if p.eventEmitter != nil {

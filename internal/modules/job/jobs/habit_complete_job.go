@@ -23,6 +23,11 @@ type HabitCompleteJob struct {
 	request     *dto.LogHabitRequest
 }
 
+// LockKey returns a unique lock key for this job instance
+func (j *HabitCompleteJob) LockKey() int64 {
+	return jobs.LockKey(j.Name(), j.habitID)
+}
+
 // NewHabitCompleteJob creates a new habit complete job
 func NewHabitCompleteJob(
 	logger *logger.ZapLogger,
@@ -46,11 +51,16 @@ func (j *HabitCompleteJob) Execute(ctx context.Context) error {
 	j.logger.Info("Habit complete job started", map[string]interface{}{
 		"habit_id": j.habitID,
 		"user_id":  j.userID,
+		"lock_key": j.LockKey(),
 		"action":   "HABIT_COMPLETE_JOB_STARTED",
 	})
 
+	// Use context with longer timeout for database operations
+	dbCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	// Get habit
-	habit, err := j.repo.GetByID(ctx, j.habitID)
+	habit, err := j.repo.GetByID(dbCtx, j.habitID)
 	if err != nil {
 		j.logger.Error("Failed to get habit in job", err, map[string]interface{}{
 			"habit_id": j.habitID,
@@ -81,7 +91,7 @@ func (j *HabitCompleteJob) Execute(ctx context.Context) error {
 	}
 
 	// Check if habit is already completed today
-	alreadyCompleted, err := j.repo.HasLogForToday(ctx, j.habitID)
+	alreadyCompleted, err := j.repo.HasLogForToday(dbCtx, j.habitID)
 	if err != nil {
 		j.logger.Error("Failed to check habit log in job", err, map[string]interface{}{
 			"habit_id": j.habitID,
@@ -109,7 +119,7 @@ func (j *HabitCompleteJob) Execute(ctx context.Context) error {
 
 	// Log habit for today
 	today := time.Now().Truncate(24 * time.Hour)
-	if err := j.repo.LogHabit(ctx, j.habitID, today, count, j.request.Notes); err != nil {
+	if err := j.repo.LogHabit(dbCtx, j.habitID, today, count, j.request.Notes); err != nil {
 		j.logger.Error("Failed to log habit in job", err, map[string]interface{}{
 			"habit_id": j.habitID,
 			"user_id":  j.userID,
@@ -122,7 +132,7 @@ func (j *HabitCompleteJob) Execute(ctx context.Context) error {
 	oldStreak := habit.CurrentStreak
 	if count >= habit.TargetCount {
 		habit.IncrementStreak()
-		if err := j.repo.Update(ctx, habit); err != nil {
+		if err := j.repo.Update(dbCtx, habit); err != nil {
 			j.logger.Error("Failed to update habit streak in job", err, map[string]interface{}{
 				"habit_id": j.habitID,
 				"user_id":  j.userID,

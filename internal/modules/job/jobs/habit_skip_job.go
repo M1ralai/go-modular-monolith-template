@@ -21,6 +21,11 @@ type HabitSkipJob struct {
 	userID      int
 }
 
+// LockKey returns a unique lock key for this job instance
+func (j *HabitSkipJob) LockKey() int64 {
+	return jobs.LockKey(j.Name(), j.habitID)
+}
+
 // NewHabitSkipJob creates a new habit skip job
 func NewHabitSkipJob(
 	logger *logger.ZapLogger,
@@ -42,11 +47,16 @@ func (j *HabitSkipJob) Execute(ctx context.Context) error {
 	j.logger.Info("Habit skip job started", map[string]interface{}{
 		"habit_id": j.habitID,
 		"user_id":  j.userID,
+		"lock_key": j.LockKey(),
 		"action":   "HABIT_SKIP_JOB_STARTED",
 	})
 
+	// Use context with longer timeout for database operations
+	dbCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	// Get habit
-	habit, err := j.repo.GetByID(ctx, j.habitID)
+	habit, err := j.repo.GetByID(dbCtx, j.habitID)
 	if err != nil {
 		j.logger.Error("Failed to get habit in job", err, map[string]interface{}{
 			"habit_id": j.habitID,
@@ -78,7 +88,7 @@ func (j *HabitSkipJob) Execute(ctx context.Context) error {
 
 	// Skip habit for today
 	today := time.Now().Truncate(24 * time.Hour)
-	if err := j.repo.SkipHabit(ctx, j.habitID, today, ""); err != nil {
+	if err := j.repo.SkipHabit(dbCtx, j.habitID, today, ""); err != nil {
 		j.logger.Error("Failed to skip habit in job", err, map[string]interface{}{
 			"habit_id": j.habitID,
 			"user_id":  j.userID,

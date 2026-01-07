@@ -9,15 +9,18 @@ import (
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/journal/domain"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/journal/dto"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/journal/repository"
+	"github.com/M1ralai/go-modular-monolith-template/internal/modules/notification"
+	notifService "github.com/M1ralai/go-modular-monolith-template/internal/modules/notification/service"
 )
 
 type journalService struct {
-	repo   repository.JournalRepository
-	logger *logger.ZapLogger
+	repo        repository.JournalRepository
+	logger      *logger.ZapLogger
+	broadcaster *notifService.Broadcaster
 }
 
-func NewJournalService(repo repository.JournalRepository, logger *logger.ZapLogger) JournalService {
-	return &journalService{repo: repo, logger: logger}
+func NewJournalService(repo repository.JournalRepository, logger *logger.ZapLogger, broadcaster *notifService.Broadcaster) JournalService {
+	return &journalService{repo: repo, logger: logger, broadcaster: broadcaster}
 }
 
 func (s *journalService) Create(ctx context.Context, req *dto.CreateJournalRequest, userID int) (*dto.JournalResponse, error) {
@@ -30,7 +33,20 @@ func (s *journalService) Create(ctx context.Context, req *dto.CreateJournalReque
 		return nil, err
 	}
 	s.logger.Info("Journal created", map[string]interface{}{"user_id": userID, "journal_id": created.ID, "action": "CREATE_JOURNAL_SUCCESS"})
-	return dto.ToJournalResponse(created), nil
+	response := dto.ToJournalResponse(created)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventJournalCreated, map[string]interface{}{
+			"journal_id": created.ID,
+			"journal":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventJournalCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+	return response, nil
 }
 
 func (s *journalService) GetByID(ctx context.Context, id, userID int) (*dto.JournalResponse, error) {
@@ -82,7 +98,20 @@ func (s *journalService) Update(ctx context.Context, id int, req *dto.UpdateJour
 		return nil, err
 	}
 	s.logger.Info("Journal updated", map[string]interface{}{"user_id": userID, "journal_id": id, "action": "UPDATE_JOURNAL_SUCCESS"})
-	return dto.ToJournalResponse(entry), nil
+	response := dto.ToJournalResponse(entry)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventJournalUpdated, map[string]interface{}{
+			"journal_id": id,
+			"journal":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventJournalUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+	return response, nil
 }
 
 func (s *journalService) Delete(ctx context.Context, id, userID int) error {
@@ -102,5 +131,16 @@ func (s *journalService) Delete(ctx context.Context, id, userID int) error {
 		return err
 	}
 	s.logger.Info("Journal deleted", map[string]interface{}{"user_id": userID, "journal_id": id, "action": "DELETE_JOURNAL_SUCCESS"})
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventJournalDeleted, map[string]interface{}{
+			"journal_id": id,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventJournalDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
 	return nil
 }

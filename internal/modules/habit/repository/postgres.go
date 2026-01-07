@@ -94,6 +94,22 @@ func (r *postgresRepository) Delete(ctx context.Context, id int) error {
 }
 
 func (r *postgresRepository) LogHabit(ctx context.Context, habitID int, logDate time.Time, count int, notes string) error {
+	// Check if a log already exists for this date
+	existingLog, err := r.GetLogsForDate(ctx, habitID, logDate)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	
+	// If log exists and is completed or skipped, don't allow update
+	if existingLog != nil {
+		if existingLog.IsCompleted {
+			return errors.New("habit already completed today")
+		}
+		if existingLog.Skipped {
+			return errors.New("habit already skipped today")
+		}
+	}
+	
 	query := `
 		INSERT INTO habit_logs (habit_id, log_date, count, notes, is_completed, skipped, created_at)
 		VALUES ($1, $2, $3, $4, $5, false, $6)
@@ -103,11 +119,27 @@ func (r *postgresRepository) LogHabit(ctx context.Context, habitID int, logDate 
 	if notes != "" {
 		notesPtr = &notes
 	}
-	_, err := r.db.ExecContext(ctx, query, habitID, logDate.Format("2006-01-02"), count, notesPtr, count > 0, time.Now())
+	_, err = r.db.ExecContext(ctx, query, habitID, logDate.Format("2006-01-02"), count, notesPtr, count > 0, time.Now())
 	return err
 }
 
 func (r *postgresRepository) SkipHabit(ctx context.Context, habitID int, logDate time.Time, notes string) error {
+	// Check if a log already exists for this date
+	existingLog, err := r.GetLogsForDate(ctx, habitID, logDate)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	
+	// If log exists and is completed or skipped, don't allow update
+	if existingLog != nil {
+		if existingLog.IsCompleted {
+			return errors.New("habit already completed today - cannot skip")
+		}
+		if existingLog.Skipped {
+			return errors.New("habit already skipped today")
+		}
+	}
+	
 	query := `
 		INSERT INTO habit_logs (habit_id, log_date, skipped, notes, is_completed, created_at)
 		VALUES ($1, $2, true, $3, false, $4)
@@ -117,14 +149,14 @@ func (r *postgresRepository) SkipHabit(ctx context.Context, habitID int, logDate
 	if notes != "" {
 		notesPtr = &notes
 	}
-	_, err := r.db.ExecContext(ctx, query, habitID, logDate.Format("2006-01-02"), notesPtr, time.Now())
+	_, err = r.db.ExecContext(ctx, query, habitID, logDate.Format("2006-01-02"), notesPtr, time.Now())
 	return err
 }
 
 func (r *postgresRepository) GetLogsForDate(ctx context.Context, habitID int, date time.Time) (*HabitLogModel, error) {
-	query := `SELECT id, habit_id, log_date, count, notes, is_completed, created_at FROM habit_logs WHERE habit_id = $1 AND log_date = $2`
+	query := `SELECT id, habit_id, log_date, count, notes, is_completed, skipped, created_at FROM habit_logs WHERE habit_id = $1 AND log_date = $2`
 	var model HabitLogModel
-	err := r.db.GetContext(ctx, &model, query, habitID, date)
+	err := r.db.GetContext(ctx, &model, query, habitID, date.Format("2006-01-02"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil

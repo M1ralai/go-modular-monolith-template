@@ -9,15 +9,18 @@ import (
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/goal/domain"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/goal/dto"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/goal/repository"
+	"github.com/M1ralai/go-modular-monolith-template/internal/modules/notification"
+	notifService "github.com/M1ralai/go-modular-monolith-template/internal/modules/notification/service"
 )
 
 type goalService struct {
-	repo   repository.GoalRepository
-	logger *logger.ZapLogger
+	repo        repository.GoalRepository
+	logger      *logger.ZapLogger
+	broadcaster *notifService.Broadcaster
 }
 
-func NewGoalService(repo repository.GoalRepository, logger *logger.ZapLogger) GoalService {
-	return &goalService{repo: repo, logger: logger}
+func NewGoalService(repo repository.GoalRepository, logger *logger.ZapLogger, broadcaster *notifService.Broadcaster) GoalService {
+	return &goalService{repo: repo, logger: logger, broadcaster: broadcaster}
 }
 
 func (s *goalService) Create(ctx context.Context, req *dto.CreateGoalRequest, userID int) (*dto.GoalResponse, error) {
@@ -34,7 +37,22 @@ func (s *goalService) Create(ctx context.Context, req *dto.CreateGoalRequest, us
 		return nil, err
 	}
 	s.logger.Info("Goal created", map[string]interface{}{"user_id": userID, "goal_id": created.ID, "action": "CREATE_GOAL_SUCCESS"})
-	return dto.ToGoalResponse(created, 0, 0), nil
+	
+	response := dto.ToGoalResponse(created, 0, 0)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventGoalCreated, map[string]interface{}{
+			"goal_id": created.ID,
+			"goal":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventGoalCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+	
+	return response, nil
 }
 
 func (s *goalService) GetByID(ctx context.Context, id, userID int) (*dto.GoalResponse, error) {
@@ -101,8 +119,40 @@ func (s *goalService) Update(ctx context.Context, id int, req *dto.UpdateGoalReq
 		return nil, err
 	}
 	s.logger.Info("Goal updated", map[string]interface{}{"user_id": userID, "goal_id": id, "action": "UPDATE_GOAL_SUCCESS"})
+	
 	total, completed, _ := s.repo.CountMilestones(ctx, id)
-	return dto.ToGoalResponse(goal, total, completed), nil
+	response := dto.ToGoalResponse(goal, total, completed)
+	
+	// Check if goal was completed
+	if req.IsCompleted != nil && *req.IsCompleted && goal.IsCompleted {
+		if s.broadcaster != nil {
+			s.broadcaster.Publish(userID, notification.EventGoalCompleted, map[string]interface{}{
+				"goal_id": id,
+				"goal":    response,
+			})
+			s.logger.Info("WebSocket event published", map[string]interface{}{
+				"event_type": notification.EventGoalCompleted,
+				"user_id":    userID,
+				"entity_id":  id,
+				"action":     "WS_EVENT_PUBLISHED",
+			})
+		}
+	}
+	
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventGoalUpdated, map[string]interface{}{
+			"goal_id": id,
+			"goal":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventGoalUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+	
+	return response, nil
 }
 
 func (s *goalService) Delete(ctx context.Context, id, userID int) error {
@@ -122,5 +172,19 @@ func (s *goalService) Delete(ctx context.Context, id, userID int) error {
 		return err
 	}
 	s.logger.Info("Goal deleted", map[string]interface{}{"user_id": userID, "goal_id": id, "action": "DELETE_GOAL_SUCCESS"})
+	
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventGoalDeleted, map[string]interface{}{
+			"goal_id": id,
+			"title":   goal.Title,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventGoalDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+	
 	return nil
 }

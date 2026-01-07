@@ -154,15 +154,42 @@ type ScheduleModel struct {
 }
 
 func (m *ScheduleModel) ToDomain() *domain.Schedule {
+	// Normalize time format - remove seconds if present and ensure HH:MM format
+	startTime := normalizeTimeString(m.StartTime)
+	endTime := normalizeTimeString(m.EndTime)
+	
 	return &domain.Schedule{
 		ID:        m.ID,
 		CourseID:  m.CourseID,
 		DayOfWeek: m.DayOfWeek,
-		StartTime: m.StartTime,
-		EndTime:   m.EndTime,
+		StartTime: startTime,
+		EndTime:   endTime,
 		Location:  derefString(m.Location),
 		CreatedAt: m.CreatedAt,
 	}
+}
+
+// normalizeTimeString converts various time formats to HH:MM
+func normalizeTimeString(timeStr string) string {
+	if timeStr == "" {
+		return "00:00"
+	}
+	
+	// If it's a timestamp format like "0000-01-01T09:00:00Z", extract time part
+	if len(timeStr) > 10 && timeStr[10] == 'T' {
+		// Extract HH:MM:SS part and convert to HH:MM
+		if len(timeStr) >= 16 {
+			timePart := timeStr[11:16] // Extract "HH:MM" part
+			return timePart
+		}
+	}
+	
+	// If it's already HH:MM or HH:MM:SS format, extract first 5 characters
+	if len(timeStr) >= 5 {
+		return timeStr[:5]
+	}
+	
+	return "00:00"
 }
 
 func FromDomainSchedule(s *domain.Schedule) *ScheduleModel {

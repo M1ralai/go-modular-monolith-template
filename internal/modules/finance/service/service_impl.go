@@ -9,15 +9,18 @@ import (
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/finance/domain"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/finance/dto"
 	"github.com/M1ralai/go-modular-monolith-template/internal/modules/finance/repository"
+	"github.com/M1ralai/go-modular-monolith-template/internal/modules/notification"
+	notifService "github.com/M1ralai/go-modular-monolith-template/internal/modules/notification/service"
 )
 
 type financeService struct {
-	repo   repository.TransactionRepository
-	logger *logger.ZapLogger
+	repo        repository.TransactionRepository
+	logger      *logger.ZapLogger
+	broadcaster *notifService.Broadcaster
 }
 
-func NewFinanceService(repo repository.TransactionRepository, logger *logger.ZapLogger) FinanceService {
-	return &financeService{repo: repo, logger: logger}
+func NewFinanceService(repo repository.TransactionRepository, logger *logger.ZapLogger, broadcaster *notifService.Broadcaster) FinanceService {
+	return &financeService{repo: repo, logger: logger, broadcaster: broadcaster}
 }
 
 func (s *financeService) Create(ctx context.Context, req *dto.CreateTransactionRequest, userID int) (*dto.TransactionResponse, error) {
@@ -30,7 +33,20 @@ func (s *financeService) Create(ctx context.Context, req *dto.CreateTransactionR
 		return nil, err
 	}
 	s.logger.Info("Transaction created", map[string]interface{}{"user_id": userID, "transaction_id": created.ID, "action": "CREATE_TRANSACTION_SUCCESS"})
-	return dto.ToTransactionResponse(created), nil
+	response := dto.ToTransactionResponse(created)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventTransactionCreated, map[string]interface{}{
+			"transaction_id": created.ID,
+			"transaction":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventTransactionCreated,
+			"user_id":    userID,
+			"entity_id":  created.ID,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+	return response, nil
 }
 
 func (s *financeService) GetByID(ctx context.Context, id, userID int) (*dto.TransactionResponse, error) {
@@ -96,7 +112,20 @@ func (s *financeService) Update(ctx context.Context, id int, req *dto.UpdateTran
 		return nil, err
 	}
 	s.logger.Info("Transaction updated", map[string]interface{}{"user_id": userID, "transaction_id": id, "action": "UPDATE_TRANSACTION_SUCCESS"})
-	return dto.ToTransactionResponse(tx), nil
+	response := dto.ToTransactionResponse(tx)
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventTransactionUpdated, map[string]interface{}{
+			"transaction_id": id,
+			"transaction":    response,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventTransactionUpdated,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
+	return response, nil
 }
 
 func (s *financeService) Delete(ctx context.Context, id, userID int) error {
@@ -116,5 +145,16 @@ func (s *financeService) Delete(ctx context.Context, id, userID int) error {
 		return err
 	}
 	s.logger.Info("Transaction deleted", map[string]interface{}{"user_id": userID, "transaction_id": id, "action": "DELETE_TRANSACTION_SUCCESS"})
+	if s.broadcaster != nil {
+		s.broadcaster.Publish(userID, notification.EventTransactionDeleted, map[string]interface{}{
+			"transaction_id": id,
+		})
+		s.logger.Info("WebSocket event published", map[string]interface{}{
+			"event_type": notification.EventTransactionDeleted,
+			"user_id":    userID,
+			"entity_id":  id,
+			"action":     "WS_EVENT_PUBLISHED",
+		})
+	}
 	return nil
 }

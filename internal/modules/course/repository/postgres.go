@@ -310,7 +310,14 @@ func (r *postgresRepository) DeleteSchedule(ctx context.Context, id int) error {
 
 func (r *postgresRepository) GetSchedules(ctx context.Context, courseID int) ([]*domain.Schedule, error) {
 	query := `
-		SELECT id, course_id, day_of_week, start_time, end_time, location, created_at
+		SELECT 
+			id, 
+			course_id, 
+			day_of_week, 
+			start_time::text as start_time, 
+			end_time::text as end_time, 
+			location, 
+			created_at
 		FROM course_schedules
 		WHERE course_id = $1
 		ORDER BY 
@@ -343,7 +350,14 @@ func (r *postgresRepository) GetSchedules(ctx context.Context, courseID int) ([]
 
 func (r *postgresRepository) GetScheduleByID(ctx context.Context, id int) (*domain.Schedule, error) {
 	query := `
-		SELECT id, course_id, day_of_week, start_time, end_time, location, created_at
+		SELECT 
+			id, 
+			course_id, 
+			day_of_week, 
+			start_time::text as start_time, 
+			end_time::text as end_time, 
+			location, 
+			created_at
 		FROM course_schedules
 		WHERE id = $1
 	`

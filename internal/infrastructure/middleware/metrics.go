@@ -25,6 +25,12 @@ func (rw *responseWriter) WriteHeader(code int) {
 
 func MetricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip metrics for WebSocket to avoid ResponseWriter wrapping
+		if r.URL.Path == "/ws" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		start := time.Now()
 		rw := NewResponseWriter(w)
 
