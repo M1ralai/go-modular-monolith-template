@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -30,6 +31,7 @@ func getJWTKey() []byte {
 }
 
 type Claims struct {
+	UserID   int    `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
 	jwt.RegisteredClaims
@@ -37,12 +39,13 @@ type Claims struct {
 
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/auth/login" || r.URL.Path == "/health" {
+		if r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/register" || r.URL.Path == "/auth/login" || r.URL.Path == "/auth/register" || r.URL.Path == "/health" || r.Method == "OPTIONS" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		authHeader := r.Header.Get("Authorization")
+		fmt.Printf("DEBUG: Auth Header: %s\n", authHeader)
 		if authHeader == "" {
 			resp := utils.ErrorResponse("UNAUTHORIZED", "Giriş yapmanız gerekiyor", "Token eksik")
 			utils.Return(w, http.StatusUnauthorized, resp)
@@ -60,7 +63,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		claims := &Claims{}
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 			return getJWTKey(), nil
-		})
+		}, jwt.WithLeeway(5*time.Minute))
 
 		if err != nil || !token.Valid {
 			resp := utils.ErrorResponse("UNAUTHORIZED", "Oturum süresi dolmuş", "Token geçersiz veya süresi dolmuş")
@@ -70,6 +73,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 
 		ctx := context.WithValue(r.Context(), utils.RoleKey, claims.Role)
 		ctx = context.WithValue(ctx, utils.UsernameKey, claims.Username)
+		ctx = context.WithValue(ctx, utils.UserIDKey, claims.UserID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

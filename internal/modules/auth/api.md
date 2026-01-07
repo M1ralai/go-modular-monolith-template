@@ -1,33 +1,19 @@
-# Auth Module API Documentation
+# Auth API
 
-## POST /login
-Kullanıcı girişi yapar.
+Base URL: `/auth`
 
-### Request Body
-```json
-{
-  "username": "string", // Zorunlu
-  "password": "string"  // Zorunlu
-}
-```
+## Endpoints
 
-### Response Body (Success - 200)
-```json
-{
-  "success": true,
-  "message": "Giriş başarılı",
-  "data": {
-    "token": "string",
-    "username": "string",
-    "role": "string",
-    "ad": "string",
-    "soyad": "string"
-  },
-  "error": null,
-  "timestamp": "string"
-}
-```
+### POST /auth/login
+User login
+- Auth: Not required
+- Body: `LoginRequest`
+- Returns: JWT token + user info
 
-### Validation Rules
-- **username**: Zorunlu (required)
-- **password**: Zorunlu (required)
+### POST /auth/register
+User registration
+- Auth: Not required
+- Body: `RegisterRequest`
+- Returns: JWT token + user info
+
+For complete API documentation, see `/api/openapi.yaml`

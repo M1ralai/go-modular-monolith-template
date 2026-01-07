@@ -14,6 +14,7 @@ type ctxKey string
 
 const RoleKey ctxKey = "role"
 const UsernameKey ctxKey = "username"
+const UserIDKey ctxKey = "user_id"
 
 func ReadJson[T any](r *http.Request, validate *validator.Validate) (T, error) {
 	var res T
@@ -78,6 +79,15 @@ func GetUsernameFromContext(ctx interface{}) string {
 		}
 	}
 	return "unknown"
+}
+
+func GetUserIDFromContext(ctx interface{}) int {
+	if c, ok := ctx.(interface{ Value(any) any }); ok {
+		if id, ok := c.Value(UserIDKey).(int); ok {
+			return id
+		}
+	}
+	return 0
 }
 
 func ReturnError(w http.ResponseWriter, code, message, details string) {

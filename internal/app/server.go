@@ -14,12 +14,53 @@ import (
 
 	authHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/auth/http"
 	authService "github.com/M1ralai/go-modular-monolith-template/internal/modules/auth/service"
-
+	courseHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/course/http"
+	courseRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/course/repository"
+	courseService "github.com/M1ralai/go-modular-monolith-template/internal/modules/course/service"
+	eventHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/event/http"
+	eventRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/event/repository"
+	eventService "github.com/M1ralai/go-modular-monolith-template/internal/modules/event/service"
+	financeHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/finance/http"
+	financeRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/finance/repository"
+	financeService "github.com/M1ralai/go-modular-monolith-template/internal/modules/finance/service"
+	goalHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/goal/http"
+	goalRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/goal/repository"
+	goalService "github.com/M1ralai/go-modular-monolith-template/internal/modules/goal/service"
+	habitHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/habit/http"
+	habitRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/habit/repository"
+	habitService "github.com/M1ralai/go-modular-monolith-template/internal/modules/habit/service"
+	healthHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/health/http"
+	journalHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/journal/http"
+	journalRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/journal/repository"
+	journalService "github.com/M1ralai/go-modular-monolith-template/internal/modules/journal/service"
+	lifeareaHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/lifearea/http"
+	lifeareaRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/lifearea/repository"
+	lifeareaService "github.com/M1ralai/go-modular-monolith-template/internal/modules/lifearea/service"
+	noteHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/note/http"
+	noteRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/note/repository"
+	noteService "github.com/M1ralai/go-modular-monolith-template/internal/modules/note/service"
+	peopleHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/people/http"
+	peopleRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/people/repository"
+	peopleService "github.com/M1ralai/go-modular-monolith-template/internal/modules/people/service"
+	taskHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/task/http"
+	taskRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/task/repository"
+	taskService "github.com/M1ralai/go-modular-monolith-template/internal/modules/task/service"
 	userHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/user/http"
 	userRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/user/repository"
 	userService "github.com/M1ralai/go-modular-monolith-template/internal/modules/user/service"
 
-	healthHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/health/http"
+	calendarHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/calendar/http"
+	calendarRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/calendar/repository"
+	calendarService "github.com/M1ralai/go-modular-monolith-template/internal/modules/calendar/service"
+
+	scheduleHttp "github.com/M1ralai/go-modular-monolith-template/internal/modules/schedule/http"
+	scheduleRepo "github.com/M1ralai/go-modular-monolith-template/internal/modules/schedule/repository"
+	scheduleService "github.com/M1ralai/go-modular-monolith-template/internal/modules/schedule/service"
+
+	"github.com/M1ralai/go-modular-monolith-template/internal/infrastructure/websocket"
+	"github.com/M1ralai/go-modular-monolith-template/internal/infrastructure/jobs"
+
+	notifService "github.com/M1ralai/go-modular-monolith-template/internal/modules/notification/service"
 
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
@@ -32,15 +73,90 @@ type Server struct {
 }
 
 func NewServer(db *sqlx.DB, zapLogger *logger.ZapLogger) *Server {
+	// WebSocket Hub
+	wsHub := websocket.NewHub(zapLogger)
+	go wsHub.Run()
+	wsHandler := websocket.NewHandler(wsHub, zapLogger)
 
+	// Broadcaster for real-time notifications
+	broadcaster := notifService.NewBroadcaster(wsHub, zapLogger)
+
+	// Job Pool for async task processing
+	jobPool := jobs.NewWorkerPool(5, 100, zapLogger, nil)
+	jobPool.Start()
+
+	// Health module
+	healthHandler := healthHttp.NewHandler()
+
+	// User module
 	userRepository := userRepo.NewPostgresRepository(db)
-	userSvc := userService.NewService(userRepository, zapLogger)
+	userSvc := userService.NewUserService(userRepository, zapLogger)
 	userHandler := userHttp.NewHandler(userSvc)
 
-	authSvc := authService.NewService(userRepository, zapLogger)
+	// Auth module
+	authSvc := authService.NewAuthService(userRepository, zapLogger)
 	authHandler := authHttp.NewHandler(authSvc)
 
-	healthHandler := healthHttp.NewHandler()
+	// LifeArea module
+	lifeareaRepository := lifeareaRepo.NewPostgresRepository(db)
+	lifeareaSvc := lifeareaService.NewLifeAreaService(lifeareaRepository, zapLogger)
+	lifeareaHandler := lifeareaHttp.NewHandler(lifeareaSvc)
+
+	// Course module
+	courseRepository := courseRepo.NewPostgresRepository(db)
+	courseSvc := courseService.NewCourseService(courseRepository, zapLogger)
+	courseHandler := courseHttp.NewHandler(courseSvc)
+
+	// Task module
+	taskRepository := taskRepo.NewPostgresRepository(db)
+	taskSvc := taskService.NewTaskService(taskRepository, zapLogger, broadcaster)
+	taskHandler := taskHttp.NewHandler(taskSvc, jobPool, taskRepository, broadcaster, zapLogger)
+
+	// Note module
+	noteRepository := noteRepo.NewPostgresRepository(db)
+	noteSvc := noteService.NewNoteService(noteRepository, zapLogger)
+	noteHandler := noteHttp.NewHandler(noteSvc)
+
+	// Habit module
+	habitRepository := habitRepo.NewPostgresRepository(db)
+	habitSvc := habitService.NewHabitService(habitRepository, zapLogger, broadcaster)
+	habitHandler := habitHttp.NewHandler(habitSvc, jobPool, habitRepository, broadcaster, zapLogger)
+
+	// Goal module
+	goalRepository := goalRepo.NewPostgresRepository(db)
+	goalSvc := goalService.NewGoalService(goalRepository, zapLogger)
+	goalHandler := goalHttp.NewHandler(goalSvc)
+
+	// Event module
+	eventRepository := eventRepo.NewPostgresRepository(db)
+	eventSvc := eventService.NewEventService(eventRepository, zapLogger, broadcaster)
+	eventHandler := eventHttp.NewHandler(eventSvc)
+
+	// People module
+	peopleRepository := peopleRepo.NewPostgresRepository(db)
+	peopleSvc := peopleService.NewPersonService(peopleRepository, zapLogger)
+	peopleHandler := peopleHttp.NewHandler(peopleSvc)
+
+	// Journal module
+	journalRepository := journalRepo.NewPostgresRepository(db)
+	journalSvc := journalService.NewJournalService(journalRepository, zapLogger)
+	journalHandler := journalHttp.NewHandler(journalSvc)
+
+	// Finance module
+	financeRepository := financeRepo.NewPostgresRepository(db)
+	financeSvc := financeService.NewFinanceService(financeRepository, zapLogger)
+	financeHandler := financeHttp.NewHandler(financeSvc)
+
+	// Calendar module
+	integrationRepository := calendarRepo.NewCalendarIntegrationRepository(db)
+	syncQueueRepository := calendarRepo.NewSyncQueueRepository(db)
+	calendarSvc := calendarService.NewCalendarService(integrationRepository, syncQueueRepository, zapLogger)
+	calendarHandler := calendarHttp.NewHandler(calendarSvc)
+
+	// Schedule module
+	blockedSlotRepository := scheduleRepo.NewBlockedTimeSlotRepository(db)
+	scheduleSvc := scheduleService.NewScheduleService(blockedSlotRepository, zapLogger, broadcaster)
+	scheduleHandler := scheduleHttp.NewHandler(scheduleSvc)
 
 	router := mux.NewRouter()
 
@@ -56,15 +172,30 @@ func NewServer(db *sqlx.DB, zapLogger *logger.ZapLogger) *Server {
 	})
 
 	router.Handle("/metrics", promhttp.Handler()).Methods("GET")
-	router.HandleFunc("/login", authHandler.Login).Methods("POST")
 	router.HandleFunc("/health", healthHandler.HealthCheck).Methods("GET")
+	router.HandleFunc("/ws", wsHandler.HandleConnection).Methods("GET")
 
+	// Public routes (no auth required)
+	authHandler.RegisterRoutes(router)
+
+	// API routes (protected)
 	api := router.PathPrefix("/api").Subrouter()
 	api.Use(middleware.AuthMiddleware)
 
-	api.HandleFunc("/users", userHandler.UsersGet).Methods("GET")
-	api.HandleFunc("/users", userHandler.UserPost).Methods("POST")
-	api.HandleFunc("/users/{id}", userHandler.UserDelete).Methods("DELETE")
+	// Register all module routes
+	userHandler.RegisterRoutes(api)
+	lifeareaHandler.RegisterRoutes(api)
+	courseHandler.RegisterRoutes(api)
+	taskHandler.RegisterRoutes(api)
+	noteHandler.RegisterRoutes(api)
+	habitHandler.RegisterRoutes(api)
+	goalHandler.RegisterRoutes(api)
+	eventHandler.RegisterRoutes(api)
+	peopleHandler.RegisterRoutes(api)
+	journalHandler.RegisterRoutes(api)
+	financeHandler.RegisterRoutes(api)
+	calendarHandler.RegisterRoutes(api)
+	scheduleHandler.RegisterRoutes(api)
 
 	port := os.Getenv("API_PORT")
 	if port == "" {
@@ -76,7 +207,7 @@ func NewServer(db *sqlx.DB, zapLogger *logger.ZapLogger) *Server {
 
 	httpServer := &http.Server{
 		Addr:         port,
-		Handler:      router,
+		Handler:      middleware.CorsMiddleware(router),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

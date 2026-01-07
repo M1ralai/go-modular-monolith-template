@@ -10,6 +10,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
+//go:embed migrations/*.sql
 var migrationsFS embed.FS
 
 func RunMigrations(db *sql.DB) error {
